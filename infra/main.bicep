@@ -9,7 +9,7 @@ param environmentName string
 @description('Primary location for all resources')
 param location string
 
-// Optional parameters to override the default azd resource naming conventions. Update the main.parameters.json file to provide values. e.g.,:
+// Optional parameters to override the default __azd__ resource naming conventions. Update the main.parameters.json file to provide values. e.g.,:
 // "resourceGroupName": {
 //      "value": "myGroupName"
 // }
@@ -21,24 +21,9 @@ param keyVaultName string = ''
 param logAnalyticsName string = ''
 param resourceGroupName string = ''
 param storageAccountName string = ''
-param sqlDatabaseName string = ''
-param sqlServerName string = ''
-param webServiceName string = ''
-param apimServiceName string = ''
-
-@description('Flag to use Azure API Management to mediate the calls between the Web frontend and the backend API')
-param useAPIM bool = false
 
 @description('Id of the user or app to assign application roles')
 param principalId string = ''
-
-@secure()
-@description('SQL Server administrator password')
-param sqlAdminPassword string
-
-@secure()
-@description('Application user password')
-param appUserPassword string
 
 var abbrs = loadJsonContent('./abbreviations.json')
 var resourceToken = toLower(uniqueString(subscription().id, environmentName, location))
@@ -49,17 +34,6 @@ resource rg 'Microsoft.Resources/resourceGroups@2021-04-01' = {
   name: !empty(resourceGroupName) ? resourceGroupName : '${abbrs.resourcesResourceGroups}${environmentName}'
   location: location
   tags: tags
-}
-
-// The application frontend
-module web './app/web.bicep' = {
-  name: 'web'
-  scope: rg
-  params: {
-    name: !empty(webServiceName) ? webServiceName : '${abbrs.webStaticSites}web-${resourceToken}'
-    location: location
-    tags: tags
-  }
 }
 
 // The application backend
@@ -74,9 +48,7 @@ module api './app/api.bicep' = {
     appServicePlanId: appServicePlan.outputs.id
     keyVaultName: keyVault.outputs.name
     storageAccountName: storage.outputs.name
-    allowedOrigins: [ web.outputs.SERVICE_WEB_URI ]
     appSettings: {
-      AZURE_SQL_CONNECTION_STRING_KEY: sqlServer.outputs.connectionStringKey
     }
   }
 }
@@ -88,21 +60,6 @@ module apiKeyVaultAccess './core/security/keyvault-access.bicep' = {
   params: {
     keyVaultName: keyVault.outputs.name
     principalId: api.outputs.SERVICE_API_IDENTITY_PRINCIPAL_ID
-  }
-}
-
-// The application database
-module sqlServer './app/db.bicep' = {
-  name: 'sql'
-  scope: rg
-  params: {
-    name: !empty(sqlServerName) ? sqlServerName : '${abbrs.sqlServers}${resourceToken}'
-    databaseName: sqlDatabaseName
-    location: location
-    tags: tags
-    sqlAdminPassword: sqlAdminPassword
-    appUserPassword: appUserPassword
-    keyVaultName: keyVault.outputs.name
   }
 }
 
@@ -157,45 +114,11 @@ module monitoring './core/monitor/monitoring.bicep' = {
   }
 }
 
-// Creates Azure API Management (APIM) service to mediate the requests between the frontend and the backend API
-module apim './core/gateway/apim.bicep' = if (useAPIM) {
-  name: 'apim-deployment'
-  scope: rg
-  params: {
-    name: !empty(apimServiceName) ? apimServiceName : '${abbrs.apiManagementService}${resourceToken}'
-    location: location
-    tags: tags
-    applicationInsightsName: monitoring.outputs.applicationInsightsName
-  }
-}
-
-// Configures the API in the Azure API Management (APIM) service
-module apimApi './app/apim-api.bicep' = if (useAPIM) {
-  name: 'apim-api-deployment'
-  scope: rg
-  params: {
-    name: useAPIM ? apim.outputs.apimServiceName : ''
-    apiName: 'todo-api'
-    apiDisplayName: 'Simple Todo API'
-    apiDescription: 'This is a simple Todo API'
-    apiPath: 'todo'
-    webFrontendUrl: web.outputs.SERVICE_WEB_URI
-    apiBackendUrl: api.outputs.SERVICE_API_URI
-    apiAppName: api.outputs.SERVICE_API_NAME
-  }
-}
-
-// Data outputs
-output AZURE_SQL_CONNECTION_STRING_KEY string = sqlServer.outputs.connectionStringKey
-
 // App outputs
 output APPLICATIONINSIGHTS_CONNECTION_STRING string = monitoring.outputs.applicationInsightsConnectionString
 output AZURE_KEY_VAULT_ENDPOINT string = keyVault.outputs.endpoint
 output AZURE_KEY_VAULT_NAME string = keyVault.outputs.name
 output AZURE_LOCATION string = location
 output AZURE_TENANT_ID string = tenant().tenantId
-output REACT_APP_API_BASE_URL string = useAPIM ? apimApi.outputs.SERVICE_API_URI : api.outputs.SERVICE_API_URI
+output REACT_APP_API_BASE_URL string = api.outputs.SERVICE_API_URI
 output REACT_APP_APPLICATIONINSIGHTS_CONNECTION_STRING string = monitoring.outputs.applicationInsightsConnectionString
-output REACT_APP_WEB_BASE_URL string = web.outputs.SERVICE_WEB_URI
-output USE_APIM bool = useAPIM
-output SERVICE_API_ENDPOINTS array = useAPIM ? [ apimApi.outputs.SERVICE_API_URI, api.outputs.SERVICE_API_URI ]: []
